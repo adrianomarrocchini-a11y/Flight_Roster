@@ -47,6 +47,8 @@
       const h = Math.floor(min / 60), m = min % 60;
       return `${h}h ${String(m).padStart(2, "0")}m`;
     }
+    // Append Zulu suffix to an HH:MM time string
+    function z(t) { return t ? t + "Z" : "–"; }
     function flightDuration(dep, arr) {
       if (!dep || !arr) return null;
       const [dh, dm] = dep.split(":").map(Number);
@@ -202,7 +204,7 @@
             <div style={{textAlign:"center"}}>
               <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:26,
                 lineHeight:1,color:T.text}}>{flight.dep}</div>
-              <div style={{fontSize:11,color:T.sub,fontFamily:"'JetBrains Mono',monospace"}}>{flight.std}</div>
+              <div style={{fontSize:11,color:T.sub,fontFamily:"'JetBrains Mono',monospace"}}>{z(flight.std)}</div>
             </div>
             <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
               <div style={{width:"100%",height:1,background:`linear-gradient(90deg,${T.accent},${T.accentDim})`,position:"relative"}}>
@@ -216,7 +218,7 @@
             <div style={{textAlign:"center"}}>
               <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:26,
                 lineHeight:1,color:T.text}}>{flight.arr}</div>
-              <div style={{fontSize:11,color:T.sub,fontFamily:"'JetBrains Mono',monospace"}}>{flight.sta}</div>
+              <div style={{fontSize:11,color:T.sub,fontFamily:"'JetBrains Mono',monospace"}}>{z(flight.sta)}</div>
             </div>
           </div>
 
@@ -244,7 +246,7 @@
               )}
               {flight.offBlock && (
                 <span style={{fontSize:10,color:T.muted,fontFamily:"'JetBrains Mono',monospace",alignSelf:"center"}}>
-                  OUT {flight.offBlock}{flight.takeoff?` · OFF ${flight.takeoff}`:""}{flight.landing?` · ON ${flight.landing}`:""}{flight.onBlock?` · IN ${flight.onBlock}`:""}
+                  OUT {flight.offBlock}Z{flight.takeoff?` · OFF ${flight.takeoff}Z`:""}{flight.landing?` · ON ${flight.landing}Z`:""}{flight.onBlock?` · IN ${flight.onBlock}Z`:""}
                 </span>
               )}
             </div>
@@ -317,11 +319,11 @@
               <input value={f.arr} onChange={e => set("arr", e.target.value.toUpperCase())} placeholder="DUB" maxLength={4} style={{marginBottom:12}}/>
             </div>
             <div>
-              <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>STD (LT)</label>
+              <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>STD (Z)</label>
               <input type="time" value={f.std} onChange={e => set("std", e.target.value)} style={{marginBottom:12}}/>
             </div>
             <div>
-              <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>STA (LT)</label>
+              <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>STA (Z)</label>
               <input type="time" value={f.sta} onChange={e => set("sta", e.target.value)} style={{marginBottom:12}}/>
             </div>
           </div>
@@ -339,23 +341,23 @@
               ACTUAL TIMES — OOOI
             </div>
             <div style={{fontSize:11,color:T.muted,marginBottom:12}}>
-              Inserisci gli orari reali per il conteggio ore di volo
+              Tutti gli orari in UTC / Zulu (Z) — per il conteggio ore di volo
             </div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
               <div>
-                <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>OFF BLOCK (OUT)</label>
+                <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>OFF BLOCK (OUT) Z</label>
                 <input type="time" value={f.offBlock} onChange={e => set("offBlock", e.target.value)} style={{marginBottom:12}}/>
               </div>
               <div>
-                <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>TAKEOFF (OFF)</label>
+                <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>TAKEOFF (OFF) Z</label>
                 <input type="time" value={f.takeoff} onChange={e => set("takeoff", e.target.value)} style={{marginBottom:12}}/>
               </div>
               <div>
-                <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>LANDING (ON)</label>
+                <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>LANDING (ON) Z</label>
                 <input type="time" value={f.landing} onChange={e => set("landing", e.target.value)} style={{marginBottom:12}}/>
               </div>
               <div>
-                <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>ON BLOCK (IN)</label>
+                <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>ON BLOCK (IN) Z</label>
                 <input type="time" value={f.onBlock} onChange={e => set("onBlock", e.target.value)} style={{marginBottom:12}}/>
               </div>
             </div>
@@ -621,7 +623,7 @@
               <span style={{fontSize:22}}>✈</span>
               <div>
                 <div style={{fontWeight:700,fontSize:17,letterSpacing:1.5,lineHeight:1}}>FLIGHTROSTER</div>
-                <div style={{fontSize:10,color:T.muted,letterSpacing:1.5}}>SIM OPERATIONS</div>
+                <div style={{fontSize:10,color:T.muted,letterSpacing:1.5}}>SIM OPERATIONS · ALL TIMES Z</div>
               </div>
             </div>
           </header>
