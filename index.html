@@ -149,6 +149,7 @@
     function BottomNav({ tab, setTab }) {
       const items = [
         { id:"roster", label:"Roster", icon:"📋" },
+        { id:"gen",    label:"Gen",    icon:"🎲" },
         { id:"add",    label:"Add",    icon:"➕" },
         { id:"stats",  label:"Stats",  icon:"📊" },
       ];
@@ -588,6 +589,349 @@
       );
     }
 
+    // ── Operators / bases / route networks ─────────────────────────────────────
+    // tz = summer (DST) UTC offset used for EASA acclimatised local reference time.
+    // block times are one-way, in minutes (realistic sector times).
+    const OPERATORS = {
+      RYR: {
+        name:"Ryanair", fleet:"B737-800", csPrefix:"FR", fnPrefix:"FR",
+        report:45, turnOut:25, turnBase:30,
+        bases: {
+          CAG: { name:"Cagliari", tz:2, routes:[
+            { icao:"CIA", name:"Roma Ciampino", block:55 },
+            { icao:"BLQ", name:"Bologna",       block:60 },
+            { icao:"PSA", name:"Pisa",          block:55 },
+            { icao:"NAP", name:"Napoli",        block:55 },
+            { icao:"BGY", name:"Bergamo",       block:70 },
+            { icao:"TRN", name:"Torino",        block:75 },
+            { icao:"TSF", name:"Treviso",       block:70 },
+            { icao:"VCE", name:"Venezia",       block:70 },
+            { icao:"MLA", name:"Malta",         block:65 },
+            { icao:"FMM", name:"Memmingen",     block:105 },
+            { icao:"FKB", name:"Karlsruhe",     block:110 },
+            { icao:"CGN", name:"Köln",          block:115 },
+            { icao:"BVA", name:"Paris Beauvais",block:120 },
+            { icao:"CRL", name:"Bruxelles CRL", block:125 },
+            { icao:"KTW", name:"Katowice",      block:135 },
+            { icao:"WMI", name:"Warsaw Modlin", block:140 },
+            { icao:"STN", name:"London STN",    block:165 },
+            { icao:"DUB", name:"Dublin",        block:180 },
+          ]},
+        },
+      },
+      WZZ: {
+        name:"Wizz Air", fleet:"A321neo", csPrefix:"W6", fnPrefix:"W6",
+        report:60, turnOut:35, turnBase:40,
+        bases: {
+          FCO: { name:"Roma Fiumicino", tz:2, routes:[
+            { icao:"CTA", name:"Catania",       block:70 },
+            { icao:"TIA", name:"Tirana",        block:75 },
+            { icao:"BEG", name:"Belgrade",      block:85 },
+            { icao:"BUD", name:"Budapest",      block:95 },
+            { icao:"VIE", name:"Vienna",        block:95 },
+            { icao:"SKP", name:"Skopje",        block:95 },
+            { icao:"SOF", name:"Sofia",         block:105 },
+            { icao:"OTP", name:"Bucharest",     block:120 },
+            { icao:"CLJ", name:"Cluj",          block:120 },
+            { icao:"KTW", name:"Katowice",      block:130 },
+            { icao:"BCN", name:"Barcelona",     block:130 },
+            { icao:"WAW", name:"Warsaw",        block:135 },
+            { icao:"IAS", name:"Iasi",          block:140 },
+            { icao:"KIV", name:"Chisinau",      block:150 },
+          ]},
+          OTP: { name:"Bucharest", tz:3, routes:[
+            { icao:"CLJ", name:"Cluj",          block:55 },
+            { icao:"TSR", name:"Timisoara",     block:60 },
+            { icao:"VIE", name:"Vienna",        block:90 },
+            { icao:"ATH", name:"Athens",        block:90 },
+            { icao:"LCA", name:"Larnaca",       block:120 },
+            { icao:"FCO", name:"Roma FCO",      block:120 },
+            { icao:"BLQ", name:"Bologna",       block:125 },
+            { icao:"WAW", name:"Warsaw",        block:135 },
+            { icao:"TLV", name:"Tel Aviv",      block:140 },
+            { icao:"BGY", name:"Milano BGY",    block:140 },
+            { icao:"DTM", name:"Dortmund",      block:150 },
+            { icao:"EIN", name:"Eindhoven",     block:165 },
+            { icao:"CRL", name:"Bruxelles CRL", block:170 },
+            { icao:"BVA", name:"Paris Beauvais",block:180 },
+            { icao:"BCN", name:"Barcelona",     block:190 },
+            { icao:"LTN", name:"London Luton",  block:210 },
+            { icao:"MAD", name:"Madrid",        block:220 },
+          ]},
+          WAW: { name:"Warsaw Chopin", tz:2, routes:[
+            { icao:"CPH", name:"Copenhagen",    block:85 },
+            { icao:"BLL", name:"Billund",       block:95 },
+            { icao:"GOT", name:"Gothenburg",    block:100 },
+            { icao:"KIV", name:"Chisinau",      block:100 },
+            { icao:"DTM", name:"Dortmund",      block:110 },
+            { icao:"OSL", name:"Oslo",          block:115 },
+            { icao:"BGY", name:"Milano BGY",    block:120 },
+            { icao:"EIN", name:"Eindhoven",     block:120 },
+            { icao:"FCO", name:"Roma FCO",      block:135 },
+            { icao:"OTP", name:"Bucharest",     block:135 },
+            { icao:"BVA", name:"Paris Beauvais",block:140 },
+            { icao:"LTN", name:"London Luton",  block:160 },
+            { icao:"MLA", name:"Malta",         block:170 },
+            { icao:"BCN", name:"Barcelona",     block:180 },
+            { icao:"LIS", name:"Lisbon",        block:230 },
+          ]},
+        },
+      },
+    };
+
+    // ── EASA ORO.FTL.205 Table 2 — max daily FDP (acclimatised) ─────────────────
+    function maxDailyFDP(localStartMin, sectors) {
+      const m = ((localStartMin % 1440) + 1440) % 1440;
+      const inB = (h1,m1,h2,m2) => {
+        const a=h1*60+m1, b=h2*60+m2;
+        return a<=b ? (m>=a && m<=b) : (m>=a || m<=b);
+      };
+      let base;
+      if      (inB(6,0,13,29))  base=780; // 13:00
+      else if (inB(13,30,13,59))base=765;
+      else if (inB(14,0,14,29)) base=750;
+      else if (inB(14,30,14,59))base=735;
+      else if (inB(15,0,15,29)) base=720;
+      else if (inB(15,30,15,59))base=705;
+      else if (inB(16,0,16,29)) base=690;
+      else if (inB(16,30,16,59))base=675;
+      else if (inB(17,0,4,59))  base=660; // 17:00–04:59 night band → 11:00
+      else if (inB(5,0,5,14))   base=720;
+      else if (inB(5,15,5,29))  base=735;
+      else if (inB(5,30,5,44))  base=750;
+      else /* 5,45–5,59 */      base=765;
+      const reduced = base - 30 * Math.max(0, sectors - 2);
+      return Math.max(540, reduced); // floor 9:00
+    }
+
+    function zToLocalMin(zHHMM, tz) {
+      const [h,mm] = zHHMM.split(":").map(Number);
+      return (((h+tz)*60 + mm) % 1440 + 1440) % 1440;
+    }
+    function inWOCL(localMin) { return localMin >= 120 && localMin <= 359; } // 02:00–05:59
+
+    function addMin(zHHMM, mins) {
+      const [h,mm] = zHHMM.split(":").map(Number);
+      let t = (h*60+mm+mins) % 1440; if (t<0) t+=1440;
+      return `${String(Math.floor(t/60)).padStart(2,"0")}:${String(t%60).padStart(2,"0")}`;
+    }
+    function minBetweenZ(a, b) {
+      const pa = a.split(":").map(Number), pb = b.split(":").map(Number);
+      let d = (pb[0]*60+pb[1]) - (pa[0]*60+pa[1]);
+      if (d < 0) d += 1440;
+      return d;
+    }
+
+    // ── Rotation generator ──────────────────────────────────────────────────────
+    function pick(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+
+    function generateRotation({ opKey, baseKey, date, role, sectorsWanted }) {
+      const OP = OPERATORS[opKey];
+      const B  = OP.bases[baseKey];
+      const slots = ["03:00","03:30","04:00","04:30","05:00","08:00","10:00","12:00","14:00"];
+      for (let attempt=0; attempt<300; attempt++) {
+        const report = pick(slots);
+        const nRound = sectorsWanted ? sectorsWanted/2 : pick([1,2,2,3]);
+        const sectors = nRound*2;
+        // bias realism with block-time ceilings per number of round trips
+        const ceil = nRound>=3 ? 130 : nRound===2 ? 185 : 999;
+        const pool = B.routes.filter(r => r.block <= ceil);
+        if (pool.length === 0) continue;
+        const dests = [];
+        for (let i=0;i<nRound;i++) dests.push(pick(pool));
+
+        let cursor = addMin(report, OP.report); // STD1
+        const legs = [];
+        let fnum = 1000 + Math.floor(Math.random()*8000);
+        for (let i=0;i<nRound;i++){
+          const d = dests[i];
+          const std1 = cursor, sta1 = addMin(std1, d.block);
+          legs.push({ dep:baseKey, arr:d.icao, std:std1, sta:sta1, block:d.block, fn:fnum++ });
+          const std2 = addMin(sta1, OP.turnOut), sta2 = addMin(std2, d.block);
+          legs.push({ dep:d.icao, arr:baseKey, std:std2, sta:sta2, block:d.block, fn:fnum++ });
+          cursor = addMin(sta2, OP.turnBase);
+        }
+
+        const fdpEnd = legs[legs.length-1].sta;
+        const fdp = minBetweenZ(report, fdpEnd);
+        const localStart = zToLocalMin(report, B.tz);
+        const maxFDP = maxDailyFDP(localStart, sectors);
+        const dayBlock = legs.reduce((s,l)=>s+l.block,0);
+
+        let wocl=false;
+        for (let t=0;t<=fdp;t+=15){
+          if (inWOCL((localStart + t) % 1440)) { wocl=true; break; }
+        }
+
+        if (fdp <= maxFDP && fdp <= 13*60) {
+          return {
+            opKey, baseKey, fleet:OP.fleet, csPrefix:OP.csPrefix, fnPrefix:OP.fnPrefix,
+            date, role, report, fdp, maxFDP, margin:maxFDP-fdp,
+            sectors, dayBlock, wocl, localStart, tz:B.tz, legs
+          };
+        }
+      }
+      return null;
+    }
+
+    // ── GenTab ──────────────────────────────────────────────────────────────────
+    function GenTab({ onAdd }) {
+      const today = new Date().toISOString().slice(0,10);
+      const [opKey,setOpKey] = useState("RYR");
+      const [baseKey,setBaseKey] = useState("CAG");
+      const [date,setDate] = useState(today);
+      const [role,setRole] = useState("CPT");
+      const [want,setWant] = useState(0);
+      const [rot,setRot] = useState(null);
+      const [err,setErr] = useState("");
+
+      const OP = OPERATORS[opKey];
+      const baseList = Object.keys(OP.bases);
+
+      const changeOp = (k) => {
+        setOpKey(k);
+        setBaseKey(Object.keys(OPERATORS[k].bases)[0]);
+        setRot(null); setErr("");
+      };
+
+      const run = () => {
+        const r = generateRotation({ opKey, baseKey, date, role, sectorsWanted: want||null });
+        if (!r) { setErr("Nessuna rotazione legale trovata, riprova o cambia settori."); setRot(null); }
+        else { setErr(""); setRot(r); }
+      };
+
+      const addToRoster = () => {
+        if (!rot) return;
+        const newFlights = rot.legs.map(l => ({
+          id: uid(), date: rot.date,
+          callsign: rot.csPrefix+l.fn, flightNumber: rot.fnPrefix+" "+l.fn,
+          aircraft: rot.fleet, dep: l.dep, arr: l.arr,
+          std: l.std, sta: l.sta,
+          offBlock:"", takeoff:"", landing:"", onBlock:"",
+          role: rot.role, status:"scheduled", notes:"Generated rotation"
+        }));
+        onAdd(newFlights);
+      };
+
+      const legal = rot && rot.fdp <= rot.maxFDP;
+      const sel = { background:T.surface };
+
+      return (
+        <div style={{padding:"16px 16px 100px"}} className="fade">
+          <h2 style={{fontWeight:700,fontSize:20,marginBottom:4,letterSpacing:.5}}>🎲 ROTATION GENERATOR</h2>
+          <div style={{fontSize:12,color:T.sub,marginBottom:16}}>
+            {OP.name} · base <b style={{color:T.accent}}>{baseKey}</b> · {OP.fleet} · EASA FTL · times Z
+          </div>
+
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
+            <div style={{marginBottom:12}}>
+              <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>OPERATOR</label>
+              <select value={opKey} onChange={e=>changeOp(e.target.value)}>
+                {Object.entries(OPERATORS).map(([k,o])=><option key={k} value={k}>{o.name}</option>)}
+              </select>
+            </div>
+            <div style={{marginBottom:12}}>
+              <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>BASE</label>
+              <select value={baseKey} onChange={e=>{setBaseKey(e.target.value);setRot(null);}}>
+                {baseList.map(k=><option key={k} value={k}>{k} — {OP.bases[k].name}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
+            <div style={{marginBottom:12}}>
+              <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>DATE</label>
+              <input type="date" value={date} onChange={e=>setDate(e.target.value)}/>
+            </div>
+            <div style={{marginBottom:12}}>
+              <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>ROLE</label>
+              <select value={role} onChange={e=>setRole(e.target.value)}>
+                <option value="CPT">Captain</option>
+                <option value="F/O">First Officer</option>
+              </select>
+            </div>
+          </div>
+          <div style={{marginBottom:14}}>
+            <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>SECTORS</label>
+            <select value={want} onChange={e=>setWant(Number(e.target.value))}>
+              <option value={0}>Auto (realistic)</option>
+              <option value={2}>2 sectors (1 round trip)</option>
+              <option value={4}>4 sectors (2 round trips)</option>
+              <option value={6}>6 sectors (3 round trips)</option>
+            </select>
+          </div>
+
+          <button onClick={run} style={{width:"100%",background:T.accent,border:"none",borderRadius:10,
+            padding:"13px 0",color:"#fff",fontSize:16,fontWeight:700,marginBottom:16}}>
+            GENERATE ROTATION
+          </button>
+
+          {err && <div style={{color:T.gold,fontSize:13,marginBottom:12}}>{err}</div>}
+
+          {rot && (
+            <div className="slide-up">
+              <div style={{background:T.card,borderRadius:12,padding:"14px 16px",marginBottom:12,
+                borderLeft:`3px solid ${legal?T.green:T.red}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                  <span style={{fontWeight:700,fontSize:15,letterSpacing:.5}}>EASA FTL CHECK</span>
+                  <span style={{background:(legal?T.green:T.red)+"22",color:legal?T.green:T.red,
+                    border:`1px solid ${(legal?T.green:T.red)}44`,borderRadius:4,padding:"2px 9px",
+                    fontSize:11,fontFamily:"'JetBrains Mono',monospace",fontWeight:700}}>
+                    {legal?"LEGAL":"ILLEGAL"}
+                  </span>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"8px 12px",
+                  fontFamily:"'JetBrains Mono',monospace",fontSize:12}}>
+                  <div><span style={{color:T.muted}}>REPORT </span><span style={{color:T.text}}>{rot.report}Z</span></div>
+                  <div><span style={{color:T.muted}}>SECTORS </span><span style={{color:T.text}}>{rot.sectors}</span></div>
+                  <div><span style={{color:T.muted}}>FDP </span><span style={{color:T.text}}>{hhmm(rot.fdp)}</span></div>
+                  <div><span style={{color:T.muted}}>MAX FDP </span><span style={{color:T.text}}>{hhmm(rot.maxFDP)}</span></div>
+                  <div><span style={{color:T.muted}}>MARGIN </span><span style={{color:rot.margin>=0?T.green:T.red}}>{hhmm(Math.abs(rot.margin))}</span></div>
+                  <div><span style={{color:T.muted}}>BLOCK </span><span style={{color:T.text}}>{hhmm(rot.dayBlock)}</span></div>
+                </div>
+                <div style={{marginTop:8,fontSize:11,fontFamily:"'JetBrains Mono',monospace",
+                  color: rot.wocl ? T.gold : T.muted}}>
+                  {rot.wocl ? "⚠ WOCL encroachment (02:00–05:59 LT, UTC+"+rot.tz+")" : "✓ No WOCL encroachment"}
+                </div>
+              </div>
+
+              {rot.legs.map((l,i)=>{
+                const next=rot.legs[i+1];
+                const turn = next ? minBetweenZ(l.sta, next.std) : null;
+                return (
+                  <div key={i}>
+                    <div style={{background:T.card,borderRadius:10,padding:"10px 14px",marginBottom:8,
+                      display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <span style={{fontFamily:"'JetBrains Mono',monospace",color:T.accent,fontWeight:600,fontSize:14}}>{rot.fnPrefix}{l.fn}</span>
+                        <span style={{marginLeft:10,fontWeight:700,fontSize:16}}>{l.dep} → {l.arr}</span>
+                      </div>
+                      <div style={{textAlign:"right",fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:T.sub}}>
+                        {l.std}Z–{l.sta}Z<br/><span style={{color:T.muted,fontSize:11}}>{hhmm(l.block)}</span>
+                      </div>
+                    </div>
+                    {next && turn!==null && (
+                      <div style={{fontSize:11,color: turn<OP.turnOut?T.gold:T.muted,
+                        fontFamily:"'JetBrains Mono',monospace",margin:"0 0 8px 8px"}}>
+                        ⟳ {hhmm(turn)} @ {l.arr}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              <button onClick={addToRoster} disabled={!legal}
+                style={{width:"100%",background: legal?T.green:T.border,border:"none",borderRadius:10,
+                  padding:"13px 0",color:legal?"#06240f":T.muted,fontSize:16,fontWeight:700,
+                  marginTop:6,cursor:legal?"pointer":"not-allowed"}}>
+                {legal ? "ADD TO ROSTER" : "CANNOT ADD (illegal)"}
+              </button>
+            </div>
+          )}
+        </div>
+      );
+    }
+
     // ── App ───────────────────────────────────────────────────────────────────
     function App() {
       const [tab, setTab] = useState("roster");
@@ -614,6 +958,11 @@
         setTab("add");
       }, []);
 
+      const addRotation = useCallback((newFlights) => {
+        setFlights(prev => [...prev, ...newFlights]);
+        setTab("roster");
+      }, []);
+
       return (
         <>
           <style>{CSS}</style>
@@ -631,6 +980,7 @@
           <main>
             <div className="inner">
               {tab === "roster" && <RosterTab flights={flights} onEdit={handleEdit} onDelete={deleteFlight}/>}
+              {tab === "gen"    && <GenTab onAdd={addRotation}/>}
               {tab === "add"    && <FlightForm initial={editing} onSave={saveFlight}
                 onCancel={editing ? () => { setEditing(null); setTab("roster"); } : null}/>}
               {tab === "stats"  && <Stats flights={flights}/>}
