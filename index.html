@@ -55,6 +55,33 @@
       if (mins < 0) mins += 24 * 60;
       return mins;
     }
+    // Actual block time = ON BLOCK (IN) − OFF BLOCK (OUT)
+    function actualBlock(f) {
+      if (!f.offBlock || !f.onBlock) return null;
+      return flightDuration(f.offBlock, f.onBlock);
+    }
+    // Air time = LANDING (ON) − TAKEOFF (OFF)
+    function airTime(f) {
+      if (!f.takeoff || !f.landing) return null;
+      return flightDuration(f.takeoff, f.landing);
+    }
+    // Difference in minutes between two date+time points (handles cross-day)
+    function minsBetween(d1, t1, d2, t2) {
+      if (!d1 || !t1 || !d2 || !t2) return null;
+      const a = new Date(`${d1}T${t1}:00`);
+      const b = new Date(`${d2}T${t2}:00`);
+      if (isNaN(a) || isNaN(b)) return null;
+      return Math.round((b - a) / 60000);
+    }
+    // Turnaround between consecutive flights at the same airport (arr A == dep B)
+    function turnaround(a, b) {
+      if (!a || !b || a.arr !== b.dep) return null;
+      const inT  = a.onBlock  || a.sta;
+      const outT = b.offBlock || b.std;
+      const m = minsBetween(a.date, inT, b.date, outT);
+      if (m === null || m < 0) return null;
+      return m;
+    }
 
     const STATUS_COLORS = {
       scheduled: "#3B82F6",
@@ -67,9 +94,9 @@
     // ── Seed data ─────────────────────────────────────────────────────────────
     const SEED = {
       flights: [
-        { id: uid(), date:"2026-06-02", callsign:"FR1234", flightNumber:"FR 1234", aircraft:"B737-800", dep:"MXP", arr:"DUB", std:"06:25", sta:"08:10", role:"CPT", status:"scheduled", notes:"" },
-        { id: uid(), date:"2026-06-02", callsign:"FR1235", flightNumber:"FR 1235", aircraft:"B737-800", dep:"DUB", arr:"MXP", std:"09:05", sta:"12:50", role:"CPT", status:"scheduled", notes:"" },
-        { id: uid(), date:"2026-06-05", callsign:"EZY401", flightNumber:"EZY 401", aircraft:"A320neo", dep:"LIN", arr:"LGW", std:"07:40", sta:"09:15", role:"F/O", status:"scheduled", notes:"Sim check ride" },
+        { id: uid(), date:"2026-06-02", callsign:"FR1234", flightNumber:"FR 1234", aircraft:"B737-800", dep:"MXP", arr:"DUB", std:"06:25", sta:"08:10", offBlock:"06:30", takeoff:"06:42", landing:"08:05", onBlock:"08:12", role:"CPT", status:"completed", notes:"" },
+        { id: uid(), date:"2026-06-02", callsign:"FR1235", flightNumber:"FR 1235", aircraft:"B737-800", dep:"DUB", arr:"MXP", std:"09:05", sta:"12:50", offBlock:"", takeoff:"", landing:"", onBlock:"", role:"CPT", status:"scheduled", notes:"" },
+        { id: uid(), date:"2026-06-05", callsign:"EZY401", flightNumber:"EZY 401", aircraft:"A320neo", dep:"LIN", arr:"LGW", std:"07:40", sta:"09:15", offBlock:"", takeoff:"", landing:"", onBlock:"", role:"F/O", status:"scheduled", notes:"Sim check ride" },
       ],
     };
 
@@ -146,6 +173,8 @@
     // ── FlightCard ────────────────────────────────────────────────────────────
     function FlightCard({ flight, onEdit, onDelete }) {
       const dur = flightDuration(flight.std, flight.sta);
+      const ab = actualBlock(flight);
+      const at = airTime(flight);
       const sc = STATUS_COLORS[flight.status] || T.accent;
       return (
         <div className="slide-up" style={{background:T.card,borderRadius:12,padding:"14px 16px",
@@ -198,6 +227,29 @@
               overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{flight.notes}</span>}
           </div>
 
+          {/* Actual times (OOOI) */}
+          {(ab !== null || at !== null) && (
+            <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
+              {ab !== null && (
+                <span style={{background:T.green+"18",color:T.green,border:`1px solid ${T.green}33`,
+                  borderRadius:6,padding:"2px 9px",fontSize:11,fontFamily:"'JetBrains Mono',monospace",fontWeight:600}}>
+                  BLK {hhmm(ab)}
+                </span>
+              )}
+              {at !== null && (
+                <span style={{background:T.accent+"18",color:T.accent,border:`1px solid ${T.accent}33`,
+                  borderRadius:6,padding:"2px 9px",fontSize:11,fontFamily:"'JetBrains Mono',monospace",fontWeight:600}}>
+                  AIR {hhmm(at)}
+                </span>
+              )}
+              {flight.offBlock && (
+                <span style={{fontSize:10,color:T.muted,fontFamily:"'JetBrains Mono',monospace",alignSelf:"center"}}>
+                  OUT {flight.offBlock}{flight.takeoff?` · OFF ${flight.takeoff}`:""}{flight.landing?` · ON ${flight.landing}`:""}{flight.onBlock?` · IN ${flight.onBlock}`:""}
+                </span>
+              )}
+            </div>
+          )}
+
           {/* Actions */}
           <div style={{display:"flex",gap:8,marginTop:10}}>
             <button onClick={() => onEdit(flight)}
@@ -212,12 +264,14 @@
     }
 
     // ── FlightForm ────────────────────────────────────────────────────────────
-    const EMPTY = { callsign:"", flightNumber:"", aircraft:"", dep:"", arr:"", std:"", sta:"", date:"", role:"CPT", status:"scheduled", notes:"" };
+    const EMPTY = { callsign:"", flightNumber:"", aircraft:"", dep:"", arr:"", std:"", sta:"", date:"", offBlock:"", takeoff:"", landing:"", onBlock:"", role:"CPT", status:"scheduled", notes:"" };
 
     function FlightForm({ initial, onSave, onCancel }) {
       const [f, setF] = useState(initial || EMPTY);
       const set = (k, v) => setF(p => ({ ...p, [k]: v }));
       const dur = flightDuration(f.std, f.sta);
+      const ab = actualBlock(f);
+      const at = airTime(f);
 
       const field = (label, key, type="text", extra={}) => (
         <div style={{marginBottom:12}}>
@@ -275,9 +329,51 @@
           {dur !== null && (
             <div style={{background:T.surface,borderRadius:8,padding:"8px 12px",marginBottom:12,
               fontFamily:"'JetBrains Mono',monospace",fontSize:13,color:T.green}}>
-              🕐 Block time: {hhmm(dur)}
+              🕐 Scheduled block: {hhmm(dur)}
             </div>
           )}
+
+          {/* Actual times — OOOI */}
+          <div style={{borderTop:`1px solid ${T.border}`,marginTop:4,paddingTop:14,marginBottom:4}}>
+            <div style={{fontSize:13,color:T.gold,fontWeight:700,letterSpacing:.8,marginBottom:2}}>
+              ACTUAL TIMES — OOOI
+            </div>
+            <div style={{fontSize:11,color:T.muted,marginBottom:12}}>
+              Inserisci gli orari reali per il conteggio ore di volo
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
+              <div>
+                <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>OFF BLOCK (OUT)</label>
+                <input type="time" value={f.offBlock} onChange={e => set("offBlock", e.target.value)} style={{marginBottom:12}}/>
+              </div>
+              <div>
+                <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>TAKEOFF (OFF)</label>
+                <input type="time" value={f.takeoff} onChange={e => set("takeoff", e.target.value)} style={{marginBottom:12}}/>
+              </div>
+              <div>
+                <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>LANDING (ON)</label>
+                <input type="time" value={f.landing} onChange={e => set("landing", e.target.value)} style={{marginBottom:12}}/>
+              </div>
+              <div>
+                <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>ON BLOCK (IN)</label>
+                <input type="time" value={f.onBlock} onChange={e => set("onBlock", e.target.value)} style={{marginBottom:12}}/>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:10,marginBottom:14}}>
+              <div style={{flex:1,background:T.surface,borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
+                <div style={{fontSize:10,color:T.muted,letterSpacing:.8}}>BLOCK TIME</div>
+                <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:15,color:T.green,fontWeight:600}}>
+                  {ab !== null ? hhmm(ab) : "–"}
+                </div>
+              </div>
+              <div style={{flex:1,background:T.surface,borderRadius:8,padding:"8px 12px",textAlign:"center"}}>
+                <div style={{fontSize:10,color:T.muted,letterSpacing:.8}}>AIR TIME</div>
+                <div style={{fontFamily:"'JetBrains Mono',monospace",fontSize:15,color:T.accent,fontWeight:600}}>
+                  {at !== null ? hhmm(at) : "–"}
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
             <div>{field("ROLE","role","select",{options:[{v:"CPT",l:"Captain"},{v:"F/O",l:"First Officer"},{v:"TRN",l:"Trainee"}]})}</div>
@@ -310,6 +406,11 @@
       const totalMins = flights.reduce((s,f) => { const d=flightDuration(f.std,f.sta); return s+(d||0); }, 0);
       const doneMins  = done.reduce((s,f)  => { const d=flightDuration(f.std,f.sta); return s+(d||0); }, 0);
 
+      // Actual logged hours from OOOI
+      const blockMins = flights.reduce((s,f) => s + (actualBlock(f)||0), 0);
+      const airMins   = flights.reduce((s,f) => s + (airTime(f)||0), 0);
+      const loggedCount = flights.filter(f => actualBlock(f) !== null).length;
+
       const acMap = {};
       flights.forEach(f => { const a=f.aircraft||"Unknown"; acMap[a]=(acMap[a]||0)+1; });
       const acList = Object.entries(acMap).sort((a,b)=>b[1]-a[1]);
@@ -332,9 +433,17 @@
       return (
         <div style={{padding:"16px 16px 100px"}} className="fade">
           <h2 style={{fontWeight:700,fontSize:20,marginBottom:16,letterSpacing:.5}}>📊 STATISTICS</h2>
+
+          <div style={{fontSize:12,color:T.gold,fontWeight:700,letterSpacing:.8,marginBottom:8}}>LOGGED HOURS (ACTUAL)</div>
+          <div style={{display:"flex",gap:10,marginBottom:10}}>
+            <StatBox label="BLOCK TIME" value={hhmm(blockMins)} sub={`${loggedCount} logged`} color={T.green}/>
+            <StatBox label="AIR TIME" value={hhmm(airMins)} sub="off→on" color={T.accent}/>
+          </div>
+
+          <div style={{fontSize:12,color:T.gold,fontWeight:700,letterSpacing:.8,marginBottom:8,marginTop:10}}>ROSTER OVERVIEW</div>
           <div style={{display:"flex",gap:10,marginBottom:10}}>
             <StatBox label="TOTAL FLIGHTS" value={total} sub={`${done.length} completed`}/>
-            <StatBox label="BLOCK TIME" value={hhmm(totalMins)} sub={`${hhmm(doneMins)} done`} color={T.green}/>
+            <StatBox label="SCHED BLOCK" value={hhmm(totalMins)} sub={`${hhmm(doneMins)} done`} color={T.sub}/>
           </div>
           <div style={{display:"flex",gap:10,marginBottom:20}}>
             <StatBox label="SECTORS" value={total} sub="all types" color={T.gold}/>
@@ -387,6 +496,20 @@
       );
     }
 
+    // ── Turnaround connector ────────────────────────────────────────────────
+    function TurnConnector({ mins, airport }) {
+      const tight = mins < 30;
+      const col = tight ? T.gold : T.sub;
+      return (
+        <div style={{display:"flex",alignItems:"center",gap:8,margin:"2px 0 12px",paddingLeft:6}}>
+          <div style={{width:2,height:22,background:`linear-gradient(${T.border},${col}66)`,borderRadius:2,marginLeft:6}}/>
+          <span style={{fontSize:11,color:col,fontFamily:"'JetBrains Mono',monospace",fontWeight:600,letterSpacing:.5}}>
+            ⟳ TURNAROUND {hhmm(mins)}{airport?` @ ${airport}`:""}{tight?"  ⚠ tight":""}
+          </span>
+        </div>
+      );
+    }
+
     // ── RosterTab ─────────────────────────────────────────────────────────────
     function RosterTab({ flights, onEdit, onDelete }) {
       const [filter, setFilter] = useState("all");
@@ -397,8 +520,21 @@
         .filter(f => !search || [f.callsign,f.flightNumber,f.dep,f.arr,f.aircraft,f.date].some(v=>(v||"").toLowerCase().includes(search.toLowerCase())))
         .sort((a,b) => (a.date+a.std).localeCompare(b.date+b.std));
 
-      const groups = {};
-      filtered.forEach(f => { (groups[f.date] = groups[f.date]||[]).push(f); });
+      // Build a flat render list: date headers + cards + turnaround connectors
+      const items = [];
+      let lastDate = null;
+      filtered.forEach((f, i) => {
+        if (f.date !== lastDate) {
+          items.push({ type:"header", date:f.date, key:"h"+f.date });
+          lastDate = f.date;
+        }
+        items.push({ type:"card", flight:f, key:f.id });
+        const next = filtered[i+1];
+        const ta = turnaround(f, next);
+        if (next && ta !== null) {
+          items.push({ type:"turn", mins:ta, airport:f.arr, key:"t"+f.id });
+        }
+      });
 
       return (
         <div style={{padding:"16px 16px 100px"}} className="fade">
@@ -423,7 +559,7 @@
             ))}
           </div>
 
-          {Object.keys(groups).length === 0 && (
+          {items.length === 0 && (
             <div style={{textAlign:"center",color:T.muted,marginTop:60}}>
               <div style={{fontSize:40,marginBottom:12}}>✈</div>
               <div style={{fontSize:16}}>No flights found</div>
@@ -431,18 +567,21 @@
             </div>
           )}
 
-          {Object.entries(groups).map(([date,flist]) => (
-            <div key={date}>
-              <div style={{fontSize:12,color:T.gold,fontWeight:700,letterSpacing:1.2,
+          {items.map(it => {
+            if (it.type === "header") return (
+              <div key={it.key} style={{fontSize:12,color:T.gold,fontWeight:700,letterSpacing:1.2,
                 marginBottom:6,marginTop:4,borderBottom:`1px solid ${T.border}`,paddingBottom:4}}>
-                {new Date(date+"T12:00:00").toLocaleDateString("en-GB",
+                {new Date(it.date+"T12:00:00").toLocaleDateString("en-GB",
                   {weekday:"short",day:"2-digit",month:"short",year:"numeric"}).toUpperCase()}
               </div>
-              {flist.map(f => (
-                <FlightCard key={f.id} flight={f} onEdit={onEdit} onDelete={onDelete}/>
-              ))}
-            </div>
-          ))}
+            );
+            if (it.type === "turn") return (
+              <TurnConnector key={it.key} mins={it.mins} airport={it.airport}/>
+            );
+            return (
+              <FlightCard key={it.key} flight={it.flight} onEdit={onEdit} onDelete={onDelete}/>
+            );
+          })}
         </div>
       );
     }
