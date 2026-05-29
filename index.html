@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+  <title>FlightRoster</title>
+
+  <!-- PWA / iOS home screen -->
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="FlightRoster"/>
+  <meta name="theme-color" content="#0A0E1A"/>
+  <link rel="manifest" href="manifest.json"/>
+
+  <!-- iOS icons (inline SVG as data URI) -->
+  <link rel="apple-touch-icon" href="icon.png"/>
+
+  <!-- React + Babel from CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <style>
+    body { margin: 0; background: #0A0E1A; }
+    #root { min-height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useCallback } = React;
+
+    // ── Storage ──────────────────────────────────────────────────────────────
+    const STORAGE_KEY = "flightroster_v1";
+    function load() {
+      try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "null"); } catch { return null; }
+    }
+    function save(data) {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
+    }
+
+    // ── Utilities ─────────────────────────────────────────────────────────────
+    function uid() { return Math.random().toString(36).slice(2, 10); }
+    function hhmm(min) {
+      if (!min && min !== 0) return "–";
+      const h = Math.floor(min / 60), m = min % 60;
+      return `${h}h ${String(m).padStart(2, "0")}m`;
+    }
+    function flightDuration(dep, arr) {
+      if (!dep || !arr) return null;
+      const [dh, dm] = dep.split(":").map(Number);
+      const [ah, am] = arr.split(":").map(Number);
+      let mins = (ah * 60 + am) - (dh * 60 + dm);
+      if (mins < 0) mins += 24 * 60;
+      return mins;
+    }
+
+    const STATUS_COLORS = {
+      scheduled: "#3B82F6",
+      completed: "#22C55E",
+      cancelled: "#EF4444",
+      standby:   "#F59E0B",
+    };
+    const STATUS_LABELS = { scheduled:"SCHED", completed:"DONE", cancelled:"CXLD", standby:"STBY" };
+
+    // ── Seed data ─────────────────────────────────────────────────────────────
+    const SEED = {
+      flights: [
+        { id: uid(), date:"2026-06-02", callsign:"FR1234", flightNumber:"FR 1234", aircraft:"B737-800", dep:"MXP", arr:"DUB", std:"06:25", sta:"08:10", role:"CPT", status:"scheduled", notes:"" },
+        { id: uid(), date:"2026-06-02", callsign:"FR1235", flightNumber:"FR 1235", aircraft:"B737-800", dep:"DUB", arr:"MXP", std:"09:05", sta:"12:50", role:"CPT", status:"scheduled", notes:"" },
+        { id: uid(), date:"2026-06-05", callsign:"EZY401", flightNumber:"EZY 401", aircraft:"A320neo", dep:"LIN", arr:"LGW", std:"07:40", sta:"09:15", role:"F/O", status:"scheduled", notes:"Sim check ride" },
+      ],
+    };
+
+    // ── Theme ─────────────────────────────────────────────────────────────────
+    const T = {
+      bg:       "#0A0E1A",
+      surface:  "#111827",
+      card:     "#1C2333",
+      border:   "#2A3450",
+      accent:   "#3B82F6",
+      accentDim:"#1D4ED8",
+      gold:     "#F59E0B",
+      text:     "#F1F5F9",
+      sub:      "#94A3B8",
+      muted:    "#475569",
+      green:    "#22C55E",
+      red:      "#EF4444",
+    };
+
+    const CSS = `
+      @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+      *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+      html,body{background:${T.bg};color:${T.text};font-family:'Rajdhani',sans-serif;min-height:100vh;overscroll-behavior:none;}
+      input,select,textarea{font-family:'Rajdhani',sans-serif;background:${T.surface};color:${T.text};border:1px solid ${T.border};border-radius:8px;padding:10px 12px;font-size:15px;width:100%;outline:none;transition:border .2s;}
+      input:focus,select:focus,textarea:focus{border-color:${T.accent};}
+      input[type=date]{color-scheme:dark;}
+      button{cursor:pointer;font-family:'Rajdhani',sans-serif;font-weight:700;letter-spacing:.5px;}
+      ::-webkit-scrollbar{width:4px;} ::-webkit-scrollbar-thumb{background:${T.border};border-radius:4px;}
+      .slide-up{animation:slideUp .25s ease;}
+      @keyframes slideUp{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+      .fade{animation:fade .2s ease;}
+      @keyframes fade{from{opacity:0}to{opacity:1}}
+      .inner{max-width:860px;margin:0 auto;width:100%;}
+    `;
+
+    // ── Tag ───────────────────────────────────────────────────────────────────
+    function Tag({ color, children }) {
+      return (
+        <span style={{background:color+"22",color,border:`1px solid ${color}44`,
+          borderRadius:4,padding:"1px 7px",fontSize:11,fontFamily:"'JetBrains Mono',monospace",
+          fontWeight:600,letterSpacing:.5}}>
+          {children}
+        </span>
+      );
+    }
+
+    // ── BottomNav ─────────────────────────────────────────────────────────────
+    function BottomNav({ tab, setTab }) {
+      const items = [
+        { id:"roster", label:"Roster", icon:"📋" },
+        { id:"add",    label:"Add",    icon:"➕" },
+        { id:"stats",  label:"Stats",  icon:"📊" },
+      ];
+      return (
+        <nav style={{position:"fixed",bottom:0,left:0,right:0,background:T.surface,
+          borderTop:`1px solid ${T.border}`,display:"flex",zIndex:100,
+          paddingBottom:"env(safe-area-inset-bottom)"}}>
+          <div className="inner" style={{display:"flex",width:"100%"}}>
+            {items.map(it => (
+              <button key={it.id} onClick={() => setTab(it.id)}
+                style={{flex:1,padding:"10px 0",background:"none",border:"none",
+                  color: tab===it.id ? T.accent : T.muted,
+                  display:"flex",flexDirection:"column",alignItems:"center",gap:2,
+                  fontSize:10,letterSpacing:.8,fontWeight:700,transition:"color .2s"}}>
+                <span style={{fontSize:20}}>{it.icon}</span>
+                {it.label.toUpperCase()}
+              </button>
+            ))}
+          </div>
+        </nav>
+      );
+    }
+
+    // ── FlightCard ────────────────────────────────────────────────────────────
+    function FlightCard({ flight, onEdit, onDelete }) {
+      const dur = flightDuration(flight.std, flight.sta);
+      const sc = STATUS_COLORS[flight.status] || T.accent;
+      return (
+        <div className="slide-up" style={{background:T.card,borderRadius:12,padding:"14px 16px",
+          borderLeft:`3px solid ${sc}`,marginBottom:10}}>
+          {/* Top row */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+            <div>
+              <span style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:600,
+                fontSize:16,color:T.accent,letterSpacing:1}}>{flight.callsign}</span>
+              {flight.flightNumber && (
+                <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,
+                  color:T.sub,marginLeft:8,letterSpacing:.5}}>#{flight.flightNumber}</span>
+              )}
+              {" "}
+              <span style={{fontSize:12,color:T.sub}}>{flight.aircraft}</span>
+            </div>
+            <div style={{display:"flex",gap:6,alignItems:"center"}}>
+              <Tag color={sc}>{STATUS_LABELS[flight.status]||flight.status}</Tag>
+              <Tag color={T.gold}>{flight.role||"CPT"}</Tag>
+            </div>
+          </div>
+
+          {/* Route row */}
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+            <div style={{textAlign:"center"}}>
+              <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:26,
+                lineHeight:1,color:T.text}}>{flight.dep}</div>
+              <div style={{fontSize:11,color:T.sub,fontFamily:"'JetBrains Mono',monospace"}}>{flight.std}</div>
+            </div>
+            <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+              <div style={{width:"100%",height:1,background:`linear-gradient(90deg,${T.accent},${T.accentDim})`,position:"relative"}}>
+                <span style={{position:"absolute",left:"50%",top:-8,transform:"translateX(-50%)",
+                  fontSize:14,color:T.accent}}>✈</span>
+              </div>
+              <span style={{fontSize:11,color:T.muted,fontFamily:"'JetBrains Mono',monospace",marginTop:6}}>
+                {dur ? hhmm(dur) : "–"}
+              </span>
+            </div>
+            <div style={{textAlign:"center"}}>
+              <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:26,
+                lineHeight:1,color:T.text}}>{flight.arr}</div>
+              <div style={{fontSize:11,color:T.sub,fontFamily:"'JetBrains Mono',monospace"}}>{flight.sta}</div>
+            </div>
+          </div>
+
+          {/* Date + notes */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <span style={{fontSize:12,color:T.muted}}>{flight.date}</span>
+            {flight.notes && <span style={{fontSize:12,color:T.sub,fontStyle:"italic",maxWidth:"55%",
+              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{flight.notes}</span>}
+          </div>
+
+          {/* Actions */}
+          <div style={{display:"flex",gap:8,marginTop:10}}>
+            <button onClick={() => onEdit(flight)}
+              style={{flex:1,background:T.border,border:"none",borderRadius:8,
+                padding:"7px 0",color:T.text,fontSize:13,fontWeight:700}}>EDIT</button>
+            <button onClick={() => onDelete(flight.id)}
+              style={{background:"none",border:`1px solid ${T.red}44`,borderRadius:8,
+                padding:"7px 14px",color:T.red,fontSize:13,fontWeight:700}}>✕</button>
+          </div>
+        </div>
+      );
+    }
+
+    // ── FlightForm ────────────────────────────────────────────────────────────
+    const EMPTY = { callsign:"", flightNumber:"", aircraft:"", dep:"", arr:"", std:"", sta:"", date:"", role:"CPT", status:"scheduled", notes:"" };
+
+    function FlightForm({ initial, onSave, onCancel }) {
+      const [f, setF] = useState(initial || EMPTY);
+      const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+      const dur = flightDuration(f.std, f.sta);
+
+      const field = (label, key, type="text", extra={}) => (
+        <div style={{marginBottom:12}}>
+          <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>
+            {label}
+          </label>
+          {type === "select" ? (
+            <select value={f[key]} onChange={e => set(key, e.target.value)}>
+              {extra.options.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+            </select>
+          ) : type === "textarea" ? (
+            <textarea value={f[key]} onChange={e => set(key, e.target.value)}
+              rows={2} style={{resize:"none"}} placeholder={extra.placeholder||""}/>
+          ) : (
+            <input type={type} value={f[key]}
+              onChange={e => set(key, type==="text" ? e.target.value.toUpperCase() : e.target.value)}
+              placeholder={extra.placeholder||""} maxLength={extra.maxLength}/>
+          )}
+        </div>
+      );
+
+      return (
+        <div style={{padding:"16px 16px 100px"}}>
+          <h2 style={{fontWeight:700,fontSize:20,marginBottom:16,color:T.text,letterSpacing:.5}}>
+            {initial?.id ? "✏️ EDIT FLIGHT" : "➕ ADD FLIGHT"}
+          </h2>
+
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
+            <div>{field("CALLSIGN","callsign","text",{placeholder:"FR1234"})}</div>
+            <div>{field("FLIGHT NUMBER","flightNumber","text",{placeholder:"FR 1234"})}</div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
+            <div>{field("AIRCRAFT","aircraft","text",{placeholder:"B737-800"})}</div>
+            <div>{field("DATE","date","date")}</div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
+            <div>
+              <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>DEPARTURE (ICAO)</label>
+              <input value={f.dep} onChange={e => set("dep", e.target.value.toUpperCase())} placeholder="MXP" maxLength={4} style={{marginBottom:12}}/>
+            </div>
+            <div>
+              <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>ARRIVAL (ICAO)</label>
+              <input value={f.arr} onChange={e => set("arr", e.target.value.toUpperCase())} placeholder="DUB" maxLength={4} style={{marginBottom:12}}/>
+            </div>
+            <div>
+              <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>STD (LT)</label>
+              <input type="time" value={f.std} onChange={e => set("std", e.target.value)} style={{marginBottom:12}}/>
+            </div>
+            <div>
+              <label style={{display:"block",fontSize:12,color:T.sub,marginBottom:4,letterSpacing:.8,fontWeight:600}}>STA (LT)</label>
+              <input type="time" value={f.sta} onChange={e => set("sta", e.target.value)} style={{marginBottom:12}}/>
+            </div>
+          </div>
+
+          {dur !== null && (
+            <div style={{background:T.surface,borderRadius:8,padding:"8px 12px",marginBottom:12,
+              fontFamily:"'JetBrains Mono',monospace",fontSize:13,color:T.green}}>
+              🕐 Block time: {hhmm(dur)}
+            </div>
+          )}
+
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 12px"}}>
+            <div>{field("ROLE","role","select",{options:[{v:"CPT",l:"Captain"},{v:"F/O",l:"First Officer"},{v:"TRN",l:"Trainee"}]})}</div>
+            <div>{field("STATUS","status","select",{options:Object.entries(STATUS_LABELS).map(([v,l])=>({v,l}))})}</div>
+          </div>
+          {field("NOTES","notes","textarea",{placeholder:"Optional notes…"})}
+
+          <div style={{display:"flex",gap:10,marginTop:4}}>
+            <button onClick={() => {
+              if (!f.callsign || !f.dep || !f.arr || !f.date) return;
+              onSave({ ...f, id: f.id || uid() });
+            }} style={{flex:1,background:T.accent,border:"none",borderRadius:10,
+              padding:"13px 0",color:"#fff",fontSize:16,fontWeight:700}}>
+              SAVE FLIGHT
+            </button>
+            {onCancel && (
+              <button onClick={onCancel}
+                style={{background:T.border,border:"none",borderRadius:10,
+                  padding:"13px 18px",color:T.text,fontSize:16,fontWeight:700}}>✕</button>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ── Stats ─────────────────────────────────────────────────────────────────
+    function Stats({ flights }) {
+      const done = flights.filter(f => f.status === "completed");
+      const total = flights.length;
+      const totalMins = flights.reduce((s,f) => { const d=flightDuration(f.std,f.sta); return s+(d||0); }, 0);
+      const doneMins  = done.reduce((s,f)  => { const d=flightDuration(f.std,f.sta); return s+(d||0); }, 0);
+
+      const acMap = {};
+      flights.forEach(f => { const a=f.aircraft||"Unknown"; acMap[a]=(acMap[a]||0)+1; });
+      const acList = Object.entries(acMap).sort((a,b)=>b[1]-a[1]);
+
+      const routeMap = {};
+      flights.forEach(f => { const r=`${f.dep}→${f.arr}`; routeMap[r]=(routeMap[r]||0)+1; });
+      const routeList = Object.entries(routeMap).sort((a,b)=>b[1]-a[1]).slice(0,5);
+
+      const roles = {};
+      flights.forEach(f => { const r=f.role||"CPT"; roles[r]=(roles[r]||0)+1; });
+
+      const StatBox = ({label,value,sub,color=T.accent}) => (
+        <div style={{background:T.card,borderRadius:12,padding:"14px 16px",flex:1,minWidth:0}}>
+          <div style={{fontSize:11,color:T.muted,letterSpacing:.8,marginBottom:4}}>{label}</div>
+          <div style={{fontSize:24,fontWeight:700,color,lineHeight:1}}>{value}</div>
+          {sub && <div style={{fontSize:11,color:T.sub,marginTop:4}}>{sub}</div>}
+        </div>
+      );
+
+      return (
+        <div style={{padding:"16px 16px 100px"}} className="fade">
+          <h2 style={{fontWeight:700,fontSize:20,marginBottom:16,letterSpacing:.5}}>📊 STATISTICS</h2>
+          <div style={{display:"flex",gap:10,marginBottom:10}}>
+            <StatBox label="TOTAL FLIGHTS" value={total} sub={`${done.length} completed`}/>
+            <StatBox label="BLOCK TIME" value={hhmm(totalMins)} sub={`${hhmm(doneMins)} done`} color={T.green}/>
+          </div>
+          <div style={{display:"flex",gap:10,marginBottom:20}}>
+            <StatBox label="SECTORS" value={total} sub="all types" color={T.gold}/>
+            <StatBox label="AVG SECTOR" value={total ? hhmm(Math.round(totalMins/total)) : "–"} color={T.sub}/>
+          </div>
+
+          {acList.length > 0 && (
+            <div style={{background:T.card,borderRadius:12,padding:"14px 16px",marginBottom:12}}>
+              <div style={{fontSize:12,color:T.muted,letterSpacing:.8,marginBottom:10,fontWeight:600}}>AIRCRAFT TYPES</div>
+              {acList.map(([ac,cnt]) => (
+                <div key={ac} style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                  <span style={{fontSize:15,fontWeight:600}}>{ac}</span>
+                  <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                    <div style={{width:80,height:4,background:T.border,borderRadius:2}}>
+                      <div style={{width:`${(cnt/total)*100}%`,height:"100%",background:T.accent,borderRadius:2}}/>
+                    </div>
+                    <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:T.sub,minWidth:24,textAlign:"right"}}>{cnt}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {routeList.length > 0 && (
+            <div style={{background:T.card,borderRadius:12,padding:"14px 16px",marginBottom:12}}>
+              <div style={{fontSize:12,color:T.muted,letterSpacing:.8,marginBottom:10,fontWeight:600}}>TOP ROUTES</div>
+              {routeList.map(([rt,cnt]) => (
+                <div key={rt} style={{display:"flex",justifyContent:"space-between",marginBottom:6,fontSize:15}}>
+                  <span style={{fontFamily:"'JetBrains Mono',monospace",color:T.accent}}>{rt}</span>
+                  <span style={{color:T.sub}}>{cnt}×</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {Object.keys(roles).length > 0 && (
+            <div style={{background:T.card,borderRadius:12,padding:"14px 16px"}}>
+              <div style={{fontSize:12,color:T.muted,letterSpacing:.8,marginBottom:10,fontWeight:600}}>ROLE BREAKDOWN</div>
+              <div style={{display:"flex",gap:10}}>
+                {Object.entries(roles).map(([r,c]) => (
+                  <div key={r} style={{background:T.surface,borderRadius:8,padding:"8px 14px",textAlign:"center"}}>
+                    <div style={{fontSize:18,fontWeight:700,color:T.gold}}>{c}</div>
+                    <div style={{fontSize:11,color:T.muted}}>{r}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ── RosterTab ─────────────────────────────────────────────────────────────
+    function RosterTab({ flights, onEdit, onDelete }) {
+      const [filter, setFilter] = useState("all");
+      const [search, setSearch] = useState("");
+
+      const filtered = flights
+        .filter(f => filter === "all" || f.status === filter)
+        .filter(f => !search || [f.callsign,f.flightNumber,f.dep,f.arr,f.aircraft,f.date].some(v=>(v||"").toLowerCase().includes(search.toLowerCase())))
+        .sort((a,b) => (a.date+a.std).localeCompare(b.date+b.std));
+
+      const groups = {};
+      filtered.forEach(f => { (groups[f.date] = groups[f.date]||[]).push(f); });
+
+      return (
+        <div style={{padding:"16px 16px 100px"}} className="fade">
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+            <h2 style={{fontWeight:700,fontSize:20,letterSpacing:.5}}>📋 MY ROSTER</h2>
+            <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:12,color:T.muted}}>
+              {flights.length} flt
+            </span>
+          </div>
+
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Search callsign, airport…" style={{marginBottom:10}}/>
+
+          <div style={{display:"flex",gap:6,marginBottom:14,overflowX:"auto",paddingBottom:4}}>
+            {["all","scheduled","completed","standby","cancelled"].map(s=>(
+              <button key={s} onClick={()=>setFilter(s)}
+                style={{background:filter===s?T.accent:T.card,border:"none",borderRadius:20,
+                  padding:"5px 14px",color:filter===s?"#fff":T.sub,
+                  fontSize:12,fontWeight:700,letterSpacing:.5,whiteSpace:"nowrap"}}>
+                {s.toUpperCase()}
+              </button>
+            ))}
+          </div>
+
+          {Object.keys(groups).length === 0 && (
+            <div style={{textAlign:"center",color:T.muted,marginTop:60}}>
+              <div style={{fontSize:40,marginBottom:12}}>✈</div>
+              <div style={{fontSize:16}}>No flights found</div>
+              <div style={{fontSize:13,marginTop:6}}>Add your first flight with ➕</div>
+            </div>
+          )}
+
+          {Object.entries(groups).map(([date,flist]) => (
+            <div key={date}>
+              <div style={{fontSize:12,color:T.gold,fontWeight:700,letterSpacing:1.2,
+                marginBottom:6,marginTop:4,borderBottom:`1px solid ${T.border}`,paddingBottom:4}}>
+                {new Date(date+"T12:00:00").toLocaleDateString("en-GB",
+                  {weekday:"short",day:"2-digit",month:"short",year:"numeric"}).toUpperCase()}
+              </div>
+              {flist.map(f => (
+                <FlightCard key={f.id} flight={f} onEdit={onEdit} onDelete={onDelete}/>
+              ))}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    // ── App ───────────────────────────────────────────────────────────────────
+    function App() {
+      const [tab, setTab] = useState("roster");
+      const [flights, setFlights] = useState(() => load()?.flights || SEED.flights);
+      const [editing, setEditing] = useState(null);
+
+      useEffect(() => { save({ flights }); }, [flights]);
+
+      const saveFlight = useCallback((f) => {
+        setFlights(prev => {
+          const idx = prev.findIndex(x => x.id === f.id);
+          return idx >= 0 ? prev.map(x => x.id===f.id ? f : x) : [...prev, f];
+        });
+        setEditing(null);
+        setTab("roster");
+      }, []);
+
+      const deleteFlight = useCallback((id) => {
+        setFlights(prev => prev.filter(f => f.id !== id));
+      }, []);
+
+      const handleEdit = useCallback((f) => {
+        setEditing(f);
+        setTab("add");
+      }, []);
+
+      return (
+        <>
+          <style>{CSS}</style>
+          <header style={{background:T.surface,borderBottom:`1px solid ${T.border}`,
+            padding:"12px 16px 10px",position:"sticky",top:0,zIndex:50}}>
+            <div className="inner" style={{display:"flex",alignItems:"center",gap:10}}>
+              <span style={{fontSize:22}}>✈</span>
+              <div>
+                <div style={{fontWeight:700,fontSize:17,letterSpacing:1.5,lineHeight:1}}>FLIGHTROSTER</div>
+                <div style={{fontSize:10,color:T.muted,letterSpacing:1.5}}>SIM OPERATIONS</div>
+              </div>
+            </div>
+          </header>
+
+          <main>
+            <div className="inner">
+              {tab === "roster" && <RosterTab flights={flights} onEdit={handleEdit} onDelete={deleteFlight}/>}
+              {tab === "add"    && <FlightForm initial={editing} onSave={saveFlight}
+                onCancel={editing ? () => { setEditing(null); setTab("roster"); } : null}/>}
+              {tab === "stats"  && <Stats flights={flights}/>}
+            </div>
+          </main>
+
+          <BottomNav tab={tab} setTab={t => { if (t==="add") setEditing(null); setTab(t); }}/>
+        </>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+  </script>
+</body>
+</html>
